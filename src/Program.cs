@@ -11,8 +11,6 @@ if (args.Length < 1)
 }
 
 string command = args[0];
-string modifier = args[1];
-string hash = args[2];
 
 if (command == "init")
 {
@@ -24,6 +22,8 @@ if (command == "init")
 }
 else if (command == "cat-file")
 {
+    string modifier = args[1];
+    string hash = args[2];
     //caf-file command used for inspecting the content of
     //objects stored in the Git database.
 
