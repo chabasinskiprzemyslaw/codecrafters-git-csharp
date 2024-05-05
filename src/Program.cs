@@ -6,6 +6,7 @@ using System.Security.AccessControl;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Unicode;
+using System.Xml.XPath;
 
 if (args.Length < 1)
 {
@@ -87,7 +88,7 @@ else if (command == "hash-object")
     }
     //read file provided in command
     var file = File.ReadAllBytes(fileName);
-    HashObjectCommand(file);
+    HashObjectCommand(file, $"blob {file.Length}\0");
 }
 else if (command == "ls-tree")
 {
@@ -149,6 +150,23 @@ else if (command == "write-tree")
     var hash = ProcessDirectory(currentPath);
     Console.Write(Convert.ToHexString(hash).ToLower());
 }
+else if (command == "commit-tree")
+{
+    string treeHash = args[1];
+    string modifier = args[2];
+    string parentHash = args[3];
+    string message = args[5];
+
+    StringBuilder sb = new StringBuilder();
+    sb.Append($"tree {treeHash}\n");
+    sb.Append($"parent {parentHash}\n");
+    sb.Append($"author Przemyslaw Ch <pc@gmail.com> 1713030569 +0200\n");
+    sb.Append($"committer Przemyslaw Ch <pc@gmail.com> 1713030569 +0200\n");
+    sb.Append($"\n{message}\n");
+    byte[] content = Encoding.UTF8.GetBytes(sb.ToString());
+    byte[] hash = HashObjectCommand(content, $"commit {content.Length}\x00", false, false);
+    Console.Write(Convert.ToHexString(hash).ToLower());
+}
 else
 {
     throw new ArgumentException($"Unknown command {command}");
@@ -166,7 +184,7 @@ static byte[]? ProcessDirectory(string currentPath)
     foreach (var file in files)
     {
         var fileBytes = File.ReadAllBytes(file);
-        byte[] hash = HashObjectCommand(fileBytes, false);
+        byte[] hash = HashObjectCommand(fileBytes, $"blob {fileBytes.Length}\x00", false);
         string fileName = Path.GetFileName(file);
         entries.Add(new TreeEntry("100644", fileName, hash));
     }
@@ -183,7 +201,7 @@ static byte[]? ProcessDirectory(string currentPath)
 
     byte[] treeContent = CreateTreeObject(entries);
 
-    return HashObjectCommand(treeContent, false, true);
+    return HashObjectCommand(treeContent, $"tree {treeContent.Length}\x00", false, true);
 }
 
 static byte[] CreateTreeObject(List<TreeEntry> entries)
@@ -201,21 +219,8 @@ static byte[] CreateTreeObject(List<TreeEntry> entries)
     return ms.ToArray();
 }
 
-static byte[] CreateBlob(byte[] file)
+static byte[] CreateGitObject(byte[] input, string header)
 {
-    //blob object in git has special header.
-    //we have to add it before real content
-    string header = $"blob {file.Length}\0";
-    byte[] headerBytes = Encoding.UTF8.GetBytes(header);
-    List<byte> buffer = new List<byte>();
-    buffer.AddRange(headerBytes);
-    buffer.AddRange(file);
-    return buffer.ToArray();
-}
-
-static byte[] CreateTreeBlob(byte[] input)
-{
-    string header = $"tree {input.Length}\x00";
     var headerBytes = Encoding.UTF8.GetBytes(header);
     List<byte> buffer = new List<byte>();
     buffer.AddRange(headerBytes);
@@ -223,10 +228,10 @@ static byte[] CreateTreeBlob(byte[] input)
     return buffer.ToArray();
 }
 
-static byte[] HashObjectCommand(byte[] file, bool isDisplayHash = true, bool isTree = false)
+static byte[] HashObjectCommand(byte[] file, string header, bool isDisplayHash = true, bool isTree = false)
 {
     //before hash I have to add blob header
-    byte[] bufferArray = isTree ? CreateTreeBlob(file) : CreateBlob(file);
+    byte[] bufferArray = CreateGitObject(file, header);
     //get hash checksum form blob content
     byte[] hash = HashSHA1(bufferArray);
     string hashString = Convert.ToHexString(hash).ToLower();
