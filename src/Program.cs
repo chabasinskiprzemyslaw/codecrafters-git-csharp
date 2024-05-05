@@ -85,23 +85,9 @@ else if (command == "hash-object")
     {
         throw new ArgumentException($"Unknown modifier {modifier}");
     }
-
     //read file provided in command
     var file = File.ReadAllBytes(fileName);
-
-    //before hash I have to add blob header
-    byte[] bufferArray = CreateBlob(file);
-    //get hash checksum form blob content
-    string hash = HashSHA1(bufferArray).ToLower();
-    Console.Write(hash);
-
-    //compress before write file into object
-    byte[] compressedBlob = Compress(bufferArray);
-
-    //Save compressed file inside Git database
-    string path = Path.Combine(".git", "objects", hash.Substring(0, 2), hash.Substring(2));
-    Directory.CreateDirectory(Path.Combine(".git", "objects", hash.Substring(0, 2)));
-    File.WriteAllBytes(path, compressedBlob);
+    HashObjectCommand(file);
 }
 else if (command == "ls-tree")
 {
@@ -153,10 +139,68 @@ else if (command == "ls-tree")
         Console.WriteLine(fileName);
     }
 }
+else if (command == "write-tree")
+{
+    //How it works?
+    //Working on project making changes in files
+    //Before we save these changes permanently ("commit")
+    //we need to select which changes you want to save.
+    var currentPath = Directory.GetCurrentDirectory();
+    var hash = ProcessDirectory(currentPath);
+    Console.Write(Convert.ToHexString(hash).ToLower());
+}
 else
 {
     throw new ArgumentException($"Unknown command {command}");
 }
+
+static byte[]? ProcessDirectory(string currentPath)
+{
+    if (currentPath.Contains(".git")) return null;
+
+    var directories = Directory.GetDirectories(currentPath);
+    var files = Directory.GetFiles(currentPath);
+
+    List<TreeEntry> entries = new List<TreeEntry>();
+
+    foreach (var file in files)
+    {
+        var fileBytes = File.ReadAllBytes(file);
+        byte[] hash = HashObjectCommand(fileBytes, false);
+        string fileName = Path.GetFileName(file);
+        entries.Add(new TreeEntry("100644", fileName, hash));
+    }
+
+    for (int i = 0; i < directories.Length; i++)
+    {
+        string directoryName = Path.GetFileName(directories[i]);
+        byte[]? directoryHash = ProcessDirectory(directories[i]);
+        if (directoryHash is not null)
+        {
+            entries.Add(new TreeEntry("40000", directoryName, directoryHash));
+        }
+    }
+
+    byte[] treeContent = CreateTreeObject(entries);
+
+    return HashObjectCommand(treeContent, false, true);
+}
+
+static byte[] CreateTreeObject(List<TreeEntry> entries)
+{
+    using var ms = new MemoryStream();
+    using var writer = new StreamWriter(ms, new UTF8Encoding(false));
+    foreach (var entry in entries.OrderBy(x => x.FileName))
+    {
+        string line = $"{entry.Mode} {entry.FileName}\x00";
+        writer.Write(line);
+        writer.Flush();
+        ms.Write(entry.Hash, 0, entry.Hash.Length);
+    }
+    writer.Flush();
+    return ms.ToArray();
+}
+
 static byte[] CreateBlob(byte[] file)
 {
     //blob object in git has special header.
@@ -168,6 +212,37 @@ static byte[] CreateBlob(byte[] file)
     buffer.AddRange(file);
     return buffer.ToArray();
 }
+
+static byte[] CreateTreeBlob(byte[] input)
+{
+    string header = $"tree {input.Length}\x00";
+    var headerBytes = Encoding.UTF8.GetBytes(header);
+    List<byte> buffer = new List<byte>();
+    buffer.AddRange(headerBytes);
+    buffer.AddRange(input);
+    return buffer.ToArray();
+}
+
+static byte[] HashObjectCommand(byte[] file, bool isDisplayHash = true, bool isTree = false)
+{
+    //before hash I have to add blob header
+    byte[] bufferArray = isTree ? CreateTreeBlob(file) : CreateBlob(file);
+    //get hash checksum form blob content
+    byte[] hash = HashSHA1(bufferArray);
+    string hashString = Convert.ToHexString(hash).ToLower();
+    if (isDisplayHash)
+        Console.Write(hashString);
+
+    //compress before write file into object
+    byte[] compressedBlob = Compress(bufferArray);
+
+    //Save compressed file inside Git database
+    string path = Path.Combine(".git", "objects", hashString.Substring(0, 2), hashString.Substring(2));
+    Directory.CreateDirectory(Path.Combine(".git", "objects", hashString.Substring(0, 2)));
+    File.WriteAllBytes(path, compressedBlob);
+    return hash;
+}
+
 
 static byte[] Decompress(byte[] buffer)
 {
@@ -190,8 +265,10 @@ static byte[] Compress(byte[] input)
     return ms.ToArray();
 }
 
-static string HashSHA1(byte[] input)
+static byte[] HashSHA1(byte[] input)
 {
     //Git use SHA1 algorithm to generate hash checksum
-    return Convert.ToHexString(SHA1.HashData(input));
+    return SHA1.HashData(input);
 }
+
+public record TreeEntry(string Mode, string FileName, byte[] Hash);
